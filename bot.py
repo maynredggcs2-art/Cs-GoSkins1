@@ -2,7 +2,7 @@ import logging
 import os
 import random
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
@@ -19,6 +19,8 @@ log = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]  # обязателен, без него бот не запустится
 START_BALANCE = 1000
+DAILY_REWARD = 150
+DAILY_COOLDOWN_HOURS = 24
 
 # --- Каталог: предметы и кейсы ---
 # value — виртуальные очки, начисляются в инвентарь. Без реальных денег и
@@ -35,44 +37,41 @@ ITEMS = {
 }
 
 CASES = {
+    # GRASS — только простые скины (common)
     "grass": {
         "name": "🟩 GRASS",
         "price": 300,
         "odds": [
-            ("common_1", 50), ("common_2", 40),
-            ("uncommon_1", 8), ("uncommon_2", 1.7),
-            ("rare_1", 0.25), ("rare_2", 0.04),
-            ("epic_1", 0.009), ("legendary_1", 0.001),
+            ("common_1", 60), ("common_2", 40),
         ],
     },
+    # ROCK — простые + немного редких (uncommon/rare)
     "rock": {
         "name": "🪨 ROCK",
         "price": 750,
         "odds": [
-            ("common_1", 35), ("common_2", 30),
-            ("uncommon_1", 20), ("uncommon_2", 12),
-            ("rare_1", 2.5), ("rare_2", 0.45),
-            ("epic_1", 0.045), ("legendary_1", 0.005),
+            ("common_1", 30), ("common_2", 25),
+            ("uncommon_1", 22), ("uncommon_2", 18),
+            ("rare_1", 4), ("rare_2", 1),
         ],
     },
+    # IRON — упор на легендарки, без совсем простых
     "iron": {
         "name": "⚙️ IRON",
         "price": 1500,
         "odds": [
-            ("common_1", 20), ("common_2", 18),
-            ("uncommon_1", 25), ("uncommon_2", 22),
-            ("rare_1", 10), ("rare_2", 4.5),
-            ("epic_1", 0.45), ("legendary_1", 0.05),
+            ("uncommon_1", 15), ("uncommon_2", 10),
+            ("rare_1", 25), ("rare_2", 20),
+            ("epic_1", 20), ("legendary_1", 10),
         ],
     },
+    # DIAMOND — только лучшие скины (epic/legendary)
     "diamond": {
         "name": "💎 DIAMOND",
         "price": 3000,
         "odds": [
-            ("common_1", 5), ("common_2", 5),
-            ("uncommon_1", 20), ("uncommon_2", 20),
-            ("rare_1", 25), ("rare_2", 22),
-            ("epic_1", 2.7), ("legendary_1", 0.3),
+            ("rare_1", 15), ("rare_2", 15),
+            ("epic_1", 40), ("legendary_1", 30),
         ],
     },
 }
@@ -108,6 +107,10 @@ def init_db():
     # без этой колонки) — просто игнорируем ошибку, если колонка уже есть.
     try:
         conn.execute("ALTER TABLE users ADD COLUMN trade_url TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN last_daily TEXT")
     except sqlite3.OperationalError:
         pass
     conn.commit()
@@ -171,6 +174,36 @@ def set_trade_url(telegram_id: int, url: str):
     conn.close()
 
 
+def add_balance(telegram_id: int, amount: int):
+    conn = db()
+    conn.execute("UPDATE users SET balance = balance + ? WHERE telegram_id = ?", (amount, telegram_id))
+    conn.commit()
+    conn.close()
+
+
+def get_last_daily(telegram_id: int):
+    conn = db()
+    row = conn.execute("SELECT last_daily FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
+    conn.close()
+    if not row or not row["last_daily"]:
+        return None
+    return datetime.fromisoformat(row["last_daily"])
+
+
+def set_last_daily(telegram_id: int, when: datetime):
+    conn = db()
+    conn.execute("UPDATE users SET last_daily = ? WHERE telegram_id = ?", (when.isoformat(), telegram_id))
+    conn.commit()
+    conn.close()
+
+
+def time_left_str(remaining: timedelta) -> str:
+    total_seconds = int(remaining.total_seconds())
+    hours, rem = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(rem, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
 def get_inventory(telegram_id: int):
     conn = db()
     rows = conn.execute(
@@ -199,6 +232,7 @@ def main_menu_keyboard():
         [InlineKeyboardButton(f"{c['name']} — {c['price']} ⭐", callback_data=f"case:{cid}")]
         for cid, c in CASES.items()
     ]
+    buttons.append([InlineKeyboardButton("🎁 Ежедневная награда", callback_data="daily")])
     buttons.append([InlineKeyboardButton("🎒 Инвентарь", callback_data="inventory")])
     buttons.append([InlineKeyboardButton("🔗 Steam Trade", callback_data="trade")])
     return InlineKeyboardMarkup(buttons)
@@ -254,6 +288,32 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 item = ITEMS[r["item_id"]]
                 lines.append(f"{item['emoji']} {item['name']} (+{item['value']})")
             text = "🎒 <b>Инвентарь</b>\n\n" + "\n".join(lines)
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="back")]])
+        await query.edit_message_text(text, reply_markup=keyboard, parse_mode="HTML")
+        return
+
+    if data == "daily":
+        last = get_last_daily(user_id)
+        now = datetime.utcnow()
+        cooldown = timedelta(hours=DAILY_COOLDOWN_HOURS)
+
+        if last is None or now - last >= cooldown:
+            add_balance(user_id, DAILY_REWARD)
+            set_last_daily(user_id, now)
+            balance = get_balance(user_id)
+            text = (
+                f"🎁 <b>Ежедневная награда получена!</b>\n\n"
+                f"+{DAILY_REWARD} ⭐\n"
+                f"Баланс: <b>{balance}</b>\n\n"
+                f"Возвращайся через {DAILY_COOLDOWN_HOURS} часов за новой наградой."
+            )
+        else:
+            remaining = cooldown - (now - last)
+            text = (
+                f"🎁 <b>Ежедневная награда</b>\n\n"
+                f"Уже забрано. Следующая награда через:\n"
+                f"⏳ <b>{time_left_str(remaining)}</b>"
+            )
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="back")]])
         await query.edit_message_text(text, reply_markup=keyboard, parse_mode="HTML")
         return
