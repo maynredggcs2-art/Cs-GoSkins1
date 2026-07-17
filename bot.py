@@ -42,6 +42,7 @@ ITEMS = {
     "rare_2": {"name": "SG 553 | Basket Halftone", "rarity": "rare", "value": 300, "emoji": "🔵"},
     "epic_1": {"name": "AK-47 | Bloodsport", "rarity": "epic", "value": 900, "emoji": "🟣"},
     "legendary_1": {"name": "AWP | Dragon Lore", "rarity": "legendary", "value": 5000, "emoji": "🟡"},
+    "legendary_2": {"name": "Butterfly", "rarity": "legendary", "value": 6000, "emoji": "🟣"},
 }
 
 CASES = {
