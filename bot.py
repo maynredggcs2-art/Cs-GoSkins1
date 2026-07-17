@@ -2,7 +2,7 @@ import logging
 import os
 import random
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
@@ -19,68 +19,119 @@ log = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]  # обязателен, без него бот не запустится
 START_BALANCE = 1000
-DAILY_REWARD = 150
-DAILY_COOLDOWN_HOURS = 24
 
 # --- Каталог: предметы и кейсы ---
-# value — виртуальные очки, начисляются в инвентарь. Без реальных денег и
-# без вывода в реальные скины/деньги — только коллекционная механика.
+# value — виртуальные очки (внутриигровая валюта ⭐), начисляются в инвентарь
+# и используются для покупки кейсов / продажи предметов обратно.
+# market_price_usd — ориентировочная цена аналогичного предмета на Steam
+# Community Market (середина 2026 года). Реальные цены скинов постоянно
+# колеблются (зависят от float, стикеров, издания и т.д.), поэтому это
+# именно ориентир для атмосферы, а не котировка в реальном времени.
+# Цены AWP | Dragon Lore и ★ Karambit | Doppler сверены с текущими
+# агрегаторами рынка (csmarketcap.com, steamanalyst.com); остальные —
+# усреднённые ориентировочные значения по палитре редкости.
+# Никакого вывода в реальные деньги/скины — только коллекционная механика.
 ITEMS = {
-    "common_1": {"name": "AK-47 | Safari Mesh", "rarity": "common", "value": 60, "emoji": "⚪"},
-    "common_2": {"name": "Glock-18 | Sand Dune", "rarity": "common", "value": 50, "emoji": "⚪"},
-    "common_3": {"name": "AUG | Sweeper", "rarity": "common", "value": 40 "emoji": "⚪"},
-    "common_4": {"name": "UMP-45 | Mudder", "rarity": "common", "value": 30 "emoji": "⚪"},
-    "common_5": {"name": "P90 | Wash Me", "rarity" : "common", "value": 20 "emoji": "⚪"},
-    "common_6": {"name": "AWP | Pit Viper", "rarity": "common", "value": 10 "emoji": "🔵"},
-    "common_7": {"name": "Five SeveN | Monkey Bussines", "rarity": "common", "value": 5 "emoji": "🟣"},
-    "uncommon_1": {"name": "M4A4 | Faded Zebra", "rarity": "uncommon", "value": 60, "emoji": "🟢"},
-    "uncommon_2": {"name": "Five-SeveN | Case Hardened", "rarity": "uncommon", "value": 75, "emoji": "🟢"},
-    "uncommon_3": {"name": "Galil AR | Destroyer", "rarity": "uncommon", "value": 70, "emoji": "🔵"},
-    "uncommon_4": {"name": "Negev | Drop Me", "rarity": "uncommon", "value": 65, "emoji": "🔵"},
-    "uncommon_5": {"name": "Galil AR | Destroyer", "rarity": "uncommon", "value": 60 "emoji": "🔵"},
-    "rare_1": {"name": "AWP | Pit Viper", "rarity": "rare", "value": 250, "emoji": "🔵"},
-    "rare_2": {"name": "SG 553 | Basket Halftone", "rarity": "rare", "value": 300, "emoji": "🔵"},
-    "epic_1": {"name": "AK-47 | Bloodsport", "rarity": "epic", "value": 900, "emoji": "🟣"},
-    "legendary_1": {"name": "AWP | Dragon Lore", "rarity": "legendary", "value": 5000, "emoji": "🟡"},
-    "legendary_2": {"name": "Butterfly", "rarity": "legendary", "value": 6000, "emoji": "🟣"},
+    # --- Обычные (common) ⚪ ---
+    "common_1": {"name": "AK-47 | Safari Mesh", "rarity": "common", "value": 20, "market_price_usd": 0.20, "emoji": "⚪"},
+    "common_2": {"name": "Glock-18 | Sand Dune", "rarity": "common", "value": 15, "market_price_usd": 0.15, "emoji": "⚪"},
+    "common_3": {"name": "P250 | Sand Dune", "rarity": "common", "value": 12, "market_price_usd": 0.12, "emoji": "⚪"},
+    "common_4": {"name": "MP9 | Storm", "rarity": "common", "value": 18, "market_price_usd": 0.18, "emoji": "⚪"},
+    "sticker_common_1": {"name": "Sticker | Ninjas in Pyjamas (Holo)", "rarity": "common", "value": 10, "market_price_usd": 0.10, "emoji": "🏷️"},
+
+    # --- Необычные (uncommon) 🟢 ---
+    "uncommon_1": {"name": "M4A4 | Faded Zebra", "rarity": "uncommon", "value": 60, "market_price_usd": 1.50, "emoji": "🟢"},
+    "uncommon_2": {"name": "Five-SeveN | Case Hardened", "rarity": "uncommon", "value": 75, "market_price_usd": 2.00, "emoji": "🟢"},
+    "uncommon_3": {"name": "Desert Eagle | Corinthian", "rarity": "uncommon", "value": 90, "market_price_usd": 3.50, "emoji": "🟢"},
+    "sticker_uncommon_1": {"name": "Sticker | Astralis (Holo) Katowice 2019", "rarity": "uncommon", "value": 65, "market_price_usd": 1.80, "emoji": "🏷️"},
+
+    # --- Редкие (rare) 🔵 ---
+    "rare_1": {"name": "AWP | Pit Viper", "rarity": "rare", "value": 250, "market_price_usd": 10.0, "emoji": "🔵"},
+    "rare_2": {"name": "SG 553 | Basket Halftone", "rarity": "rare", "value": 300, "market_price_usd": 14.0, "emoji": "🔵"},
+    "rare_3": {"name": "USP-S | Kill Confirmed", "rarity": "rare", "value": 350, "market_price_usd": 18.0, "emoji": "🔵"},
+    "sticker_rare_1": {"name": "Sticker | Katowice 2015 (Foil)", "rarity": "rare", "value": 400, "market_price_usd": 25.0, "emoji": "🏷️"},
+
+    # --- Эпические (epic) 🟣 ---
+    "epic_1": {"name": "AK-47 | Bloodsport", "rarity": "epic", "value": 900, "market_price_usd": 45.0, "emoji": "🟣"},
+    "epic_2": {"name": "M4A1-S | Hyper Beast", "rarity": "epic", "value": 1100, "market_price_usd": 55.0, "emoji": "🟣"},
+    "sticker_epic_1": {"name": "Sticker | iBUYPOWER (Holo) Katowice 2014", "rarity": "epic", "value": 1600, "market_price_usd": 120.0, "emoji": "🏷️"},
+
+    # --- Легендарные (legendary) 🟡 ---
+    "legendary_1": {"name": "AWP | Dragon Lore", "rarity": "legendary", "value": 5000, "market_price_usd": 5000.0, "emoji": "🟡"},
+    "legendary_2": {"name": "M4A4 | Howl", "rarity": "legendary", "value": 2500, "market_price_usd": 2500.0, "emoji": "🟡"},
+
+    # --- Ножи (knife) 🔪 — топовая редкость ---
+    "knife_1": {"name": "★ Karambit | Doppler", "rarity": "knife", "value": 8000, "market_price_usd": 8200.0, "emoji": "🔪"},
+    "knife_2": {"name": "★ Butterfly Knife | Fade", "rarity": "knife", "value": 2200, "market_price_usd": 2200.0, "emoji": "🔪"},
+    "knife_3": {"name": "★ M9 Bayonet | Crimson Web", "rarity": "knife", "value": 1500, "market_price_usd": 1500.0, "emoji": "🔪"},
+
+    # --- Перчатки (gloves) 🧤 — топовая редкость ---
+    "glove_1": {"name": "★ Sport Gloves | Pandora's Box", "rarity": "glove", "value": 2500, "market_price_usd": 2500.0, "emoji": "🧤"},
+    "glove_2": {"name": "★ Specialist Gloves | Crimson Kimono", "rarity": "glove", "value": 1200, "market_price_usd": 1200.0, "emoji": "🧤"},
+}
+
+RARITY_ORDER = ["common", "uncommon", "rare", "epic", "legendary", "knife", "glove"]
+RARITY_LABELS = {
+    "common": "Обычные",
+    "uncommon": "Необычные",
+    "rare": "Редкие",
+    "epic": "Эпические",
+    "legendary": "Легендарные",
+    "knife": "Ножи",
+    "glove": "Перчатки",
 }
 
 CASES = {
-    # GRASS — только простые скины (common)
     "grass": {
         "name": "🟩 GRASS",
         "price": 300,
         "odds": [
-            ("common_1", 60), ("common_2", 40),
+            ("common_1", 45), ("common_2", 35), ("common_3", 30), ("common_4", 25), ("sticker_common_1", 20),
+            ("uncommon_1", 8), ("uncommon_2", 6), ("uncommon_3", 5), ("sticker_uncommon_1", 4),
+            ("rare_1", 0.3), ("rare_2", 0.25), ("rare_3", 0.2), ("sticker_rare_1", 0.15),
+            ("epic_1", 0.02), ("epic_2", 0.015), ("sticker_epic_1", 0.01),
+            ("legendary_1", 0.002), ("legendary_2", 0.0015),
+            ("knife_1", 0.0005), ("knife_2", 0.0004), ("knife_3", 0.0004),
+            ("glove_1", 0.0004), ("glove_2", 0.0004),
         ],
     },
-    # ROCK — простые + немного редких (uncommon/rare)
     "rock": {
         "name": "🪨 ROCK",
         "price": 750,
         "odds": [
-            ("common_1", 30), ("common_2", 25),
-            ("uncommon_1", 22), ("uncommon_2", 18),
-            ("rare_1", 4), ("rare_2", 1),
+            ("common_1", 30), ("common_2", 25), ("common_3", 20), ("common_4", 18), ("sticker_common_1", 15),
+            ("uncommon_1", 18), ("uncommon_2", 15), ("uncommon_3", 13), ("sticker_uncommon_1", 10),
+            ("rare_1", 3), ("rare_2", 2.5), ("rare_3", 2), ("sticker_rare_1", 1.5),
+            ("epic_1", 0.08), ("epic_2", 0.06), ("sticker_epic_1", 0.05),
+            ("legendary_1", 0.008), ("legendary_2", 0.006),
+            ("knife_1", 0.002), ("knife_2", 0.002), ("knife_3", 0.002),
+            ("glove_1", 0.002), ("glove_2", 0.002),
         ],
     },
-    # IRON — упор на легендарки, без совсем простых
     "iron": {
         "name": "⚙️ IRON",
         "price": 1500,
         "odds": [
-            ("uncommon_1", 15), ("uncommon_2", 10),
-            ("rare_1", 25), ("rare_2", 20),
-            ("epic_1", 20), ("legendary_1", 10),
+            ("common_1", 18), ("common_2", 15), ("common_3", 12), ("common_4", 10), ("sticker_common_1", 8),
+            ("uncommon_1", 22), ("uncommon_2", 20), ("uncommon_3", 18), ("sticker_uncommon_1", 15),
+            ("rare_1", 10), ("rare_2", 8), ("rare_3", 7), ("sticker_rare_1", 5),
+            ("epic_1", 0.5), ("epic_2", 0.4), ("sticker_epic_1", 0.3),
+            ("legendary_1", 0.06), ("legendary_2", 0.05),
+            ("knife_1", 0.01), ("knife_2", 0.01), ("knife_3", 0.01),
+            ("glove_1", 0.01), ("glove_2", 0.01),
         ],
     },
-    # DIAMOND — только лучшие скины (epic/legendary)
     "diamond": {
         "name": "💎 DIAMOND",
         "price": 3000,
         "odds": [
-            ("rare_1", 15), ("rare_2", 15),
-            ("epic_1", 40), ("legendary_1", 30),
+            ("common_1", 4), ("common_2", 4), ("common_3", 3), ("common_4", 3), ("sticker_common_1", 3),
+            ("uncommon_1", 18), ("uncommon_2", 16), ("uncommon_3", 14), ("sticker_uncommon_1", 12),
+            ("rare_1", 22), ("rare_2", 20), ("rare_3", 18), ("sticker_rare_1", 15),
+            ("epic_1", 3), ("epic_2", 2.5), ("sticker_epic_1", 2),
+            ("legendary_1", 0.35), ("legendary_2", 0.3),
+            ("knife_1", 0.05), ("knife_2", 0.05), ("knife_3", 0.05),
+            ("glove_1", 0.05), ("glove_2", 0.05),
         ],
     },
 }
@@ -116,10 +167,6 @@ def init_db():
     # без этой колонки) — просто игнорируем ошибку, если колонка уже есть.
     try:
         conn.execute("ALTER TABLE users ADD COLUMN trade_url TEXT")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        conn.execute("ALTER TABLE users ADD COLUMN last_daily TEXT")
     except sqlite3.OperationalError:
         pass
     conn.commit()
@@ -183,44 +230,47 @@ def set_trade_url(telegram_id: int, url: str):
     conn.close()
 
 
-def add_balance(telegram_id: int, amount: int):
-    conn = db()
-    conn.execute("UPDATE users SET balance = balance + ? WHERE telegram_id = ?", (amount, telegram_id))
-    conn.commit()
-    conn.close()
-
-
-def get_last_daily(telegram_id: int):
-    conn = db()
-    row = conn.execute("SELECT last_daily FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
-    conn.close()
-    if not row or not row["last_daily"]:
-        return None
-    return datetime.fromisoformat(row["last_daily"])
-
-
-def set_last_daily(telegram_id: int, when: datetime):
-    conn = db()
-    conn.execute("UPDATE users SET last_daily = ? WHERE telegram_id = ?", (when.isoformat(), telegram_id))
-    conn.commit()
-    conn.close()
-
-
-def time_left_str(remaining: timedelta) -> str:
-    total_seconds = int(remaining.total_seconds())
-    hours, rem = divmod(total_seconds, 3600)
-    minutes, seconds = divmod(rem, 60)
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-
-
-def get_inventory(telegram_id: int):
+def get_inventory(telegram_id: int, limit: int = 15):
     conn = db()
     rows = conn.execute(
-        "SELECT item_id, obtained_at FROM inventory WHERE telegram_id = ? ORDER BY obtained_at DESC LIMIT 30",
-        (telegram_id,),
+        "SELECT id, item_id, obtained_at FROM inventory WHERE telegram_id = ? ORDER BY obtained_at DESC LIMIT ?",
+        (telegram_id, limit),
     ).fetchall()
     conn.close()
     return rows
+
+
+def sell_item(telegram_id: int, row_id: int):
+    """Продаёт один предмет из инвентаря по его id. Возвращает начисленную
+    сумму или None, если предмет не найден / не принадлежит пользователю."""
+    conn = db()
+    row = conn.execute(
+        "SELECT item_id FROM inventory WHERE id = ? AND telegram_id = ?",
+        (row_id, telegram_id),
+    ).fetchone()
+    if row is None:
+        conn.close()
+        return None
+    value = ITEMS[row["item_id"]]["value"]
+    conn.execute("DELETE FROM inventory WHERE id = ?", (row_id,))
+    conn.execute("UPDATE users SET balance = balance + ? WHERE telegram_id = ?", (value, telegram_id))
+    conn.commit()
+    conn.close()
+    return value
+
+
+def sell_all(telegram_id: int):
+    """Продаёт весь инвентарь пользователя. Возвращает (кол-во предметов, сумма)."""
+    conn = db()
+    rows = conn.execute(
+        "SELECT item_id FROM inventory WHERE telegram_id = ?", (telegram_id,)
+    ).fetchall()
+    total = sum(ITEMS[r["item_id"]]["value"] for r in rows)
+    conn.execute("DELETE FROM inventory WHERE telegram_id = ?", (telegram_id,))
+    conn.execute("UPDATE users SET balance = balance + ? WHERE telegram_id = ?", (total, telegram_id))
+    conn.commit()
+    conn.close()
+    return len(rows), total
 
 
 def roll_case(case_id: str) -> str:
@@ -241,7 +291,6 @@ def main_menu_keyboard():
         [InlineKeyboardButton(f"{c['name']} — {c['price']} ⭐", callback_data=f"case:{cid}")]
         for cid, c in CASES.items()
     ]
-    buttons.append([InlineKeyboardButton("🎁 Ежедневная награда", callback_data="daily")])
     buttons.append([InlineKeyboardButton("🎒 Инвентарь", callback_data="inventory")])
     buttons.append([InlineKeyboardButton("🔗 Steam Trade", callback_data="trade")])
     return InlineKeyboardMarkup(buttons)
@@ -258,9 +307,29 @@ def case_keyboard(case_id: str):
 def after_open_keyboard(case_id: str):
     buttons = [
         [InlineKeyboardButton("🎲 Открыть ещё", callback_data=f"open:{case_id}")],
+        [InlineKeyboardButton("🎒 Инвентарь", callback_data="inventory")],
         [InlineKeyboardButton("⬅️ В магазин", callback_data="back")],
     ]
     return InlineKeyboardMarkup(buttons)
+
+
+def case_preview_text(case_id: str) -> str:
+    case = CASES[case_id]
+    odds = case["odds"]
+    total = sum(w for _, w in odds)
+    by_rarity = {}
+    for item_id, w in odds:
+        by_rarity.setdefault(ITEMS[item_id]["rarity"], []).append((item_id, w))
+
+    lines = []
+    for rarity in RARITY_ORDER:
+        group = by_rarity.get(rarity)
+        if not group:
+            continue
+        prob = sum(w for _, w in group) / total * 100
+        names = ", ".join(f"{ITEMS[i]['emoji']} {ITEMS[i]['name']}" for i, _ in group)
+        lines.append(f"<b>{RARITY_LABELS[rarity]}</b> ({prob:.3f}%):\n{names}")
+    return "\n\n".join(lines)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -291,40 +360,46 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rows = get_inventory(user_id)
         if not rows:
             text = "🎒 Инвентарь пуст. Открой кейс, чтобы получить первый предмет."
+            keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="back")]])
         else:
-            lines = []
+            lines = ["🎒 <b>Инвентарь</b> (последние {}):\n".format(len(rows))]
+            buttons = []
             for r in rows:
                 item = ITEMS[r["item_id"]]
-                lines.append(f"{item['emoji']} {item['name']} (+{item['value']})")
-            text = "🎒 <b>Инвентарь</b>\n\n" + "\n".join(lines)
-        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="back")]])
+                lines.append(f"{item['emoji']} {item['name']} — {item['value']} ⭐ (≈${item['market_price_usd']:.2f} на Steam)")
+                buttons.append([
+                    InlineKeyboardButton(
+                        f"💰 Продать {item['emoji']} {item['name'][:22]} — {item['value']}⭐",
+                        callback_data=f"sell:{r['id']}",
+                    )
+                ])
+            text = "\n".join(lines)
+            buttons.append([InlineKeyboardButton("💰 Продать всё", callback_data="sellall")])
+            buttons.append([InlineKeyboardButton("⬅️ Назад", callback_data="back")])
+            keyboard = InlineKeyboardMarkup(buttons)
         await query.edit_message_text(text, reply_markup=keyboard, parse_mode="HTML")
         return
 
-    if data == "daily":
-        last = get_last_daily(user_id)
-        now = datetime.utcnow()
-        cooldown = timedelta(hours=DAILY_COOLDOWN_HOURS)
-
-        if last is None or now - last >= cooldown:
-            add_balance(user_id, DAILY_REWARD)
-            set_last_daily(user_id, now)
-            balance = get_balance(user_id)
-            text = (
-                f"🎁 <b>Ежедневная награда получена!</b>\n\n"
-                f"+{DAILY_REWARD} ⭐\n"
-                f"Баланс: <b>{balance}</b>\n\n"
-                f"Возвращайся через {DAILY_COOLDOWN_HOURS} часов за новой наградой."
-            )
+    if data.startswith("sell:"):
+        row_id = int(data.split(":", 1)[1])
+        value = sell_item(user_id, row_id)
+        if value is None:
+            await query.answer("Предмет не найден (уже продан?)", show_alert=True)
         else:
-            remaining = cooldown - (now - last)
-            text = (
-                f"🎁 <b>Ежедневная награда</b>\n\n"
-                f"Уже забрано. Следующая награда через:\n"
-                f"⏳ <b>{time_left_str(remaining)}</b>"
-            )
-        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="back")]])
-        await query.edit_message_text(text, reply_markup=keyboard, parse_mode="HTML")
+            await query.answer(f"Продано за {value} ⭐", show_alert=False)
+        # Обновляем экран инвентаря
+        query.data = "inventory"
+        await on_callback(update, context)
+        return
+
+    if data == "sellall":
+        count, total = sell_all(user_id)
+        if count == 0:
+            await query.answer("Инвентарь и так пуст", show_alert=True)
+        else:
+            await query.answer(f"Продано предметов: {count}, получено {total} ⭐", show_alert=True)
+        query.data = "inventory"
+        await on_callback(update, context)
         return
 
     if data == "trade":
@@ -354,13 +429,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("case:"):
         case_id = data.split(":", 1)[1]
         case = CASES[case_id]
-        items_preview = "\n".join(
-            f"{ITEMS[i]['emoji']} {ITEMS[i]['name']}" for i, _ in case["odds"]
-        )
         text = (
             f"📦 <b>{case['name']}</b>\n"
             f"Цена: {case['price']} ⭐\n\n"
-            f"Возможные предметы:\n{items_preview}"
+            f"Возможные предметы по редкости:\n\n{case_preview_text(case_id)}"
         )
         await query.edit_message_text(text, reply_markup=case_keyboard(case_id), parse_mode="HTML")
         return
@@ -381,8 +453,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = (
             f"📦 Открыт кейс «{case['name']}»\n\n"
             f"{item['emoji']} <b>{item['name']}</b>\n"
-            f"Редкость: {item['rarity']}\n"
-            f"+{item['value']} очков в инвентарь\n\n"
+            f"Редкость: {RARITY_LABELS[item['rarity']]}\n"
+            f"+{item['value']} ⭐ в инвентарь (≈${item['market_price_usd']:.2f} на Steam Market)\n\n"
             f"⭐ Баланс: <b>{balance}</b>"
         )
         await query.edit_message_text(text, reply_markup=after_open_keyboard(case_id), parse_mode="HTML")
@@ -408,7 +480,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ В магазин", callback_data="back")]])
     await update.message.reply_text(
         "✅ Ссылка сохранена!",
-        "❌ времменые тех.роботы",
         reply_markup=keyboard,
     )
 
@@ -419,15 +490,4 @@ async def balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    init_db()
-    app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("balance", balance_cmd))
-    app.add_handler(CallbackQueryHandler(on_callback))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    log.info("Bot started")
-    app.run_polling()
-
-
-if __name__ == "__main__":
-    main()
+ 
