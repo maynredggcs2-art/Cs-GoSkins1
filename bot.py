@@ -10,6 +10,8 @@ from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
+    MessageHandler,
+    filters,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -33,24 +35,44 @@ ITEMS = {
 }
 
 CASES = {
-    "eco": {
-        "name": "Эко",
-        "price": 500,
+    "grass": {
+        "name": "🟩 GRASS",
+        "price": 300,
         "odds": [
-            ("common_1", 40), ("common_2", 35),
-            ("uncommon_1", 15), ("uncommon_2", 7),
-            ("rare_1", 2.5), ("rare_2", 0.4),
-            ("epic_1", 0.09), ("legendary_1", 0.01),
+            ("common_1", 50), ("common_2", 40),
+            ("uncommon_1", 8), ("uncommon_2", 1.7),
+            ("rare_1", 0.25), ("rare_2", 0.04),
+            ("epic_1", 0.009), ("legendary_1", 0.001),
         ],
     },
-    "premium": {
-        "name": "Premium",
+    "rock": {
+        "name": "🪨 ROCK",
+        "price": 750,
+        "odds": [
+            ("common_1", 35), ("common_2", 30),
+            ("uncommon_1", 20), ("uncommon_2", 12),
+            ("rare_1", 2.5), ("rare_2", 0.45),
+            ("epic_1", 0.045), ("legendary_1", 0.005),
+        ],
+    },
+    "iron": {
+        "name": "⚙️ IRON",
         "price": 1500,
         "odds": [
-            ("common_1", 20), ("common_2", 20),
-            ("uncommon_1", 25), ("uncommon_2", 20),
+            ("common_1", 20), ("common_2", 18),
+            ("uncommon_1", 25), ("uncommon_2", 22),
             ("rare_1", 10), ("rare_2", 4.5),
             ("epic_1", 0.45), ("legendary_1", 0.05),
+        ],
+    },
+    "diamond": {
+        "name": "💎 DIAMOND",
+        "price": 3000,
+        "odds": [
+            ("common_1", 5), ("common_2", 5),
+            ("uncommon_1", 20), ("uncommon_2", 20),
+            ("rare_1", 25), ("rare_2", 22),
+            ("epic_1", 2.7), ("legendary_1", 0.3),
         ],
     },
 }
@@ -82,6 +104,12 @@ def init_db():
         );
         """
     )
+    # Миграция для уже существующей базы (если бот уже был задеплоен раньше
+    # без этой колонки) — просто игнорируем ошибку, если колонка уже есть.
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN trade_url TEXT")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     conn.close()
 
@@ -129,6 +157,20 @@ def add_inventory(telegram_id: int, item_id: str):
     conn.close()
 
 
+def get_trade_url(telegram_id: int):
+    conn = db()
+    row = conn.execute("SELECT trade_url FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
+    conn.close()
+    return row["trade_url"] if row else None
+
+
+def set_trade_url(telegram_id: int, url: str):
+    conn = db()
+    conn.execute("UPDATE users SET trade_url = ? WHERE telegram_id = ?", (url, telegram_id))
+    conn.commit()
+    conn.close()
+
+
 def get_inventory(telegram_id: int):
     conn = db()
     rows = conn.execute(
@@ -154,10 +196,11 @@ def roll_case(case_id: str) -> str:
 # --- Экраны ---
 def main_menu_keyboard():
     buttons = [
-        [InlineKeyboardButton(f"📦 {c['name']} — {c['price']} ⭐", callback_data=f"case:{cid}")]
+        [InlineKeyboardButton(f"{c['name']} — {c['price']} ⭐", callback_data=f"case:{cid}")]
         for cid, c in CASES.items()
     ]
     buttons.append([InlineKeyboardButton("🎒 Инвентарь", callback_data="inventory")])
+    buttons.append([InlineKeyboardButton("🔗 Steam Trade", callback_data="trade")])
     return InlineKeyboardMarkup(buttons)
 
 
@@ -195,6 +238,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
 
     if data == "back":
+        context.user_data["awaiting_trade_url"] = False
         balance = get_balance(user_id)
         text = f"🏪 <b>Магазин кейсов</b>\n\n⭐ Баланс: <b>{balance}</b>\n\nВыбери кейс:"
         await query.edit_message_text(text, reply_markup=main_menu_keyboard(), parse_mode="HTML")
@@ -210,6 +254,30 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 item = ITEMS[r["item_id"]]
                 lines.append(f"{item['emoji']} {item['name']} (+{item['value']})")
             text = "🎒 <b>Инвентарь</b>\n\n" + "\n".join(lines)
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="back")]])
+        await query.edit_message_text(text, reply_markup=keyboard, parse_mode="HTML")
+        return
+
+    if data == "trade":
+        current = get_trade_url(user_id)
+        if current:
+            text = (
+                f"🔗 <b>Steam Trade URL</b>\n\n"
+                f"Текущая ссылка:\n<code>{current}</code>\n\n"
+                f"Чтобы изменить — просто пришли новую ссылку сообщением."
+            )
+        else:
+            text = (
+                "🔗 <b>Steam Trade URL</b>\n\n"
+                "Ссылка ещё не указана.\n\n"
+                "Пришли её сообщением. Взять можно тут:\n"
+                "Steam → Инвентарь → Обмен предметами → "
+                "«Кто может отправлять мне предложения обмена?» → "
+                "скопировать ссылку.\n\n"
+                "Выглядит так:\n"
+                "<code>https://steamcommunity.com/tradeoffer/new/?partner=...&token=...</code>"
+            )
+        context.user_data["awaiting_trade_url"] = True
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="back")]])
         await query.edit_message_text(text, reply_markup=keyboard, parse_mode="HTML")
         return
@@ -233,7 +301,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         case = CASES[case_id]
 
         if not try_spend(user_id, case["price"]):
-            await query.answer("Недостаточно баланса!", show_alert=True)
+            await query.answer("Недостаточно монет для покупки кейса", show_alert=True)
             return
 
         item_id = roll_case(case_id)
@@ -252,6 +320,29 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.user_data.get("awaiting_trade_url"):
+        return  # обычное сообщение не по делу — игнорируем
+
+    url = update.message.text.strip()
+    if not url.startswith("https://steamcommunity.com/tradeoffer/"):
+        await update.message.reply_text(
+            "Похоже, это не похоже на Steam Trade URL.\n"
+            "Ссылка должна начинаться с:\n"
+            "https://steamcommunity.com/tradeoffer/\n\n"
+            "Пришли её ещё раз, либо нажми /start чтобы отменить."
+        )
+        return
+
+    set_trade_url(update.effective_user.id, url)
+    context.user_data["awaiting_trade_url"] = False
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ В магазин", callback_data="back")]])
+    await update.message.reply_text(
+        "✅ Ссылка сохранена!",
+        reply_markup=keyboard,
+    )
+
+
 async def balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     row = get_or_create_user(update.effective_user.id, update.effective_user.username)
     await update.message.reply_text(f"⭐ Баланс: {row['balance']}")
@@ -263,6 +354,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("balance", balance_cmd))
     app.add_handler(CallbackQueryHandler(on_callback))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     log.info("Bot started")
     app.run_polling()
 
