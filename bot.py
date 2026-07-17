@@ -26,10 +26,18 @@ DAILY_COOLDOWN_HOURS = 24
 # value — виртуальные очки, начисляются в инвентарь. Без реальных денег и
 # без вывода в реальные скины/деньги — только коллекционная механика.
 ITEMS = {
-    "common_1": {"name": "AK-47 | Safari Mesh", "rarity": "common", "value": 20, "emoji": "⚪"},
-    "common_2": {"name": "Glock-18 | Sand Dune", "rarity": "common", "value": 15, "emoji": "⚪"},
+    "common_1": {"name": "AK-47 | Safari Mesh", "rarity": "common", "value": 60, "emoji": "⚪"},
+    "common_2": {"name": "Glock-18 | Sand Dune", "rarity": "common", "value": 50, "emoji": "⚪"},
+    "common_3": {"name": "AUG | Sweeper", "rarity": "common", "value": 40 "emoji": "⚪"},
+    "common_4": {"name": "UMP-45 | Mudder", "rarity": "common", "value": 30 "emoji": "⚪"},
+    "common_5": {"name": "P90 | Wash Me", "rarity" : "common", "value": 20 "emoji": "⚪"},
+    "common_6": {"name": "AWP | Pit Viper", "rarity": "common", "value": 10 "emoji": "🔵"},
+    "common_7": {"name": "Five SeveN | Monkey Bussines", "rarity": "common", "value": 5 "emoji": "🟣"},
     "uncommon_1": {"name": "M4A4 | Faded Zebra", "rarity": "uncommon", "value": 60, "emoji": "🟢"},
     "uncommon_2": {"name": "Five-SeveN | Case Hardened", "rarity": "uncommon", "value": 75, "emoji": "🟢"},
+    "uncommon_3": {"name": "Galil AR | Destroyer", "rarity": "uncommon", "value": 70, "emoji": "🔵"},
+    "uncommon_4": {"name": "Negev | Drop Me", "rarity": "uncommon", "value": 65, "emoji": "🔵"},
+    "uncommon_5": {"name": "Galil AR | Destroyer", "rarity": "uncommon", "value": 60 "emoji": "🔵"},
     "rare_1": {"name": "AWP | Pit Viper", "rarity": "rare", "value": 250, "emoji": "🔵"},
     "rare_2": {"name": "SG 553 | Basket Halftone", "rarity": "rare", "value": 300, "emoji": "🔵"},
     "epic_1": {"name": "AK-47 | Bloodsport", "rarity": "epic", "value": 900, "emoji": "🟣"},
@@ -399,6 +407,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ В магазин", callback_data="back")]])
     await update.message.reply_text(
         "✅ Ссылка сохранена!",
+        "❌ времменые тех.роботы",
         reply_markup=keyboard,
     )
 
